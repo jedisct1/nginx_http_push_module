@@ -185,4 +185,4 @@ Last-Modified and Etag headers. (All modern web browsers do this.)
 
 ----------------------- Protocol Spec --------------------------------------
 This module is unconditionally (fully) compliant with the Basic HTTP Push 
-Relay Protocol, Rev. 2.21, found in the file protocol.txt.
+Relay Protocol, Rev. 2.23, found in the file protocol.txt.
