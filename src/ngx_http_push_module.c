@@ -258,6 +258,13 @@ static ngx_str_t * ngx_http_push_get_channel_id(ngx_http_request_t *r, ngx_http_
         etag->len = ngx_sprintf(etag->data,"%ui", message_tag)- etag->data;          \
     }
 
+#define NGX_HTTP_PUSH_MAKE_ETAG_AS_PRAGMA(message_tag, pragma, alloc_func, pool)           \
+    pragma = alloc_func(pool, sizeof(*pragma) + sizeof "NPM-Etag=" - 1U + NGX_INT_T_LEN);  \
+    if(pragma!=NULL) {                                                                     \
+        pragma->data = (u_char *)(pragma+1);                                               \
+        pragma->len = ngx_sprintf(pragma->data,"NPM-Etag=%ui", message_tag)- pragma->data; \
+    }
+
 #define NGX_HTTP_PUSH_MAKE_CONTENT_TYPE(content_type, content_type_len, msg, pool)  \
     if(((content_type) = ngx_palloc(pool, sizeof(*content_type)+content_type_len))!=NULL) { \
         (content_type)->len=content_type_len;                                        \
@@ -277,6 +284,7 @@ static ngx_int_t ngx_http_push_subscriber_handler(ngx_http_request_t *r) {
 	
 	ngx_str_t                      *content_type=NULL;
 	ngx_str_t                      *etag;
+	ngx_str_t                      *pragma = NULL;
 	
     if (r->method == NGX_HTTP_OPTIONS) {
         ngx_buf_t *buf = ngx_create_temp_buf(r->pool, sizeof(NGX_HTTP_PUSH_OPTIONS_OK_MESSAGE));
@@ -435,7 +443,7 @@ static ngx_int_t ngx_http_push_subscriber_handler(ngx_http_request_t *r) {
 						r->headers_out.last_modified_time=ngx_http_parse_time(r->headers_in.if_modified_since->value.data, r->headers_in.if_modified_since->value.len);
 					}
 					if ((etag=ngx_http_push_subscriber_get_etag(r)) != NULL) {
-						r->headers_out.etag=ngx_http_push_add_response_header(r, &NGX_HTTP_PUSH_HEADER_ETAG, etag);
+						r->headers_out.etag=ngx_http_push_add_response_header(r, &NGX_HTTP_PUSH_HEADER_ETAG, etag);                        
 					}
 					return NGX_HTTP_NOT_MODIFIED;
 					
@@ -454,13 +462,13 @@ static ngx_int_t ngx_http_push_subscriber_handler(ngx_http_request_t *r) {
 			ngx_shmtx_lock(&shpool->mutex);
 			ngx_http_push_reserve_message_locked(channel, msg);
 			NGX_HTTP_PUSH_MAKE_ETAG(msg->message_tag, etag, ngx_palloc, r->pool);
-			if(etag==NULL) {
+			NGX_HTTP_PUSH_MAKE_ETAG_AS_PRAGMA(msg->message_tag, pragma, ngx_palloc, r->pool);        
+			if(etag==NULL || pragma==NULL) {
 				//oh, nevermind...
 				ngx_shmtx_unlock(&shpool->mutex);
-				ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "push module: unable to allocate memory for Etag header");
+				ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "push module: unable to allocate memory for Etag/Pragma headers");
 				return NGX_ERROR;
-			}
-			
+			}        
 			content_type_len = msg->content_type.len;
 			if(content_type_len>0) {
 				NGX_HTTP_PUSH_MAKE_CONTENT_TYPE(content_type, content_type_len, msg, r->pool);
@@ -499,7 +507,7 @@ static ngx_int_t ngx_http_push_subscriber_handler(ngx_http_request_t *r) {
 				clnf->log = r->pool->log;
 			}
 			
-			return ngx_http_push_prepare_response_to_subscriber_request(r, chain, content_type, etag, last_modified);
+			return ngx_http_push_prepare_response_to_subscriber_request(r, chain, content_type, etag, pragma, last_modified);
 			
 		default: //we shouldn't be here.
 			return NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -850,6 +858,7 @@ static ngx_int_t ngx_http_push_respond_to_subscribers(ngx_http_push_channel_t *c
 		//copy everything we need first
 		ngx_str_t                  *content_type=NULL;
 		ngx_str_t                  *etag=NULL;
+		ngx_str_t                  *pragma=NULL;        
 		time_t                      last_modified_time;
 		ngx_chain_t                *chain;
 		size_t                      content_type_len;
@@ -861,7 +870,8 @@ static ngx_int_t ngx_http_push_respond_to_subscribers(ngx_http_push_channel_t *c
 		
 		//etag
 		NGX_HTTP_PUSH_MAKE_ETAG(msg->message_tag, etag, ngx_pcalloc, ngx_http_push_pool);
-		if(etag==NULL) {
+		NGX_HTTP_PUSH_MAKE_ETAG_AS_PRAGMA(msg->message_tag, pragma, ngx_pcalloc, ngx_http_push_pool);        
+		if(etag==NULL || pragma==NULL) {
 			//oh, nevermind...
 			ngx_shmtx_unlock(&shpool->mutex);
 			return NGX_ERROR;
@@ -874,6 +884,7 @@ static ngx_int_t ngx_http_push_respond_to_subscribers(ngx_http_push_channel_t *c
 			if(content_type==NULL) {
 				ngx_shmtx_unlock(&shpool->mutex);
 				ngx_pfree(ngx_http_push_pool, etag);
+				ngx_pfree(ngx_http_push_pool, pragma);                
 				ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "push module: unable to allocate memory for content-type header while responding to several subscriber request");
 				return NGX_ERROR;
 			}
@@ -883,6 +894,7 @@ static ngx_int_t ngx_http_push_respond_to_subscribers(ngx_http_push_channel_t *c
 		if((chain = ngx_http_push_create_output_chain_locked(msg->buf, ngx_http_push_pool, ngx_cycle->log, shpool))==NULL) {
 			ngx_shmtx_unlock(&shpool->mutex);
 			ngx_pfree(ngx_http_push_pool, etag);
+			ngx_pfree(ngx_http_push_pool, pragma);            
 			ngx_pfree(ngx_http_push_pool, content_type);
 			ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "push module: unable to create output chain while responding to several subscriber request");
 			return NGX_ERROR;
@@ -906,7 +918,7 @@ static ngx_int_t ngx_http_push_respond_to_subscribers(ngx_http_push_channel_t *c
 			
 			r->discard_body=0; //hacky hacky!
 			
-			ngx_http_finalize_request(r, ngx_http_push_prepare_response_to_subscriber_request(r, chain, content_type, etag, last_modified_time)); //BAM!
+			ngx_http_finalize_request(r, ngx_http_push_prepare_response_to_subscriber_request(r, chain, content_type, etag, pragma, last_modified_time)); //BAM!
 			responded_subscribers++;
 			
 			//done with this subscriber. free the sucker.
@@ -921,6 +933,7 @@ static ngx_int_t ngx_http_push_respond_to_subscribers(ngx_http_push_channel_t *c
 		
 		//free everything relevant
 		ngx_pfree(ngx_http_push_pool, etag);
+		ngx_pfree(ngx_http_push_pool, pragma);        
 		ngx_pfree(ngx_http_push_pool, content_type);
 		if(buffer->file) {
 			ngx_close_file(buffer->file->fd);
@@ -1198,7 +1211,7 @@ static ngx_int_t ngx_http_push_respond_status_only(ngx_http_request_t *r, ngx_in
 }
 
 //allocates nothing
-static ngx_int_t ngx_http_push_prepare_response_to_subscriber_request(ngx_http_request_t *r, ngx_chain_t *chain, ngx_str_t *content_type, ngx_str_t *etag, time_t last_modified) {
+static ngx_int_t ngx_http_push_prepare_response_to_subscriber_request(ngx_http_request_t *r, ngx_chain_t *chain, ngx_str_t *content_type, ngx_str_t *etag, ngx_str_t *pragma, time_t last_modified) {
 	ngx_int_t                      res;
 	if (content_type!=NULL) {
 		r->headers_out.content_type.len=content_type->len;
@@ -1212,6 +1225,12 @@ static ngx_int_t ngx_http_push_prepare_response_to_subscriber_request(ngx_http_r
 	if(etag!=NULL) {
 		//etag, if we need one
 		if ((r->headers_out.etag=ngx_http_push_add_response_header(r, &NGX_HTTP_PUSH_HEADER_ETAG, etag))==NULL) {
+			return NGX_HTTP_INTERNAL_SERVER_ERROR;
+		}
+	}
+	if(pragma!=NULL) {
+		//pragma, if we need one
+		if ((r->headers_out.etag=ngx_http_push_add_response_header(r, &NGX_HTTP_PUSH_HEADER_PRAGMA, pragma))==NULL) {
 			return NGX_HTTP_INTERNAL_SERVER_ERROR;
 		}
 	}
