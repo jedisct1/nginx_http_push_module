@@ -15,7 +15,7 @@
 //emergency garbage collecting goodness;
 ngx_http_push_channel_queue_t channel_gc_sentinel;
 
-static void ngx_http_push_clean_timeouted_subscribter(ngx_event_t *ev)
+static void ngx_http_push_clean_timeouted_subscriber(ngx_event_t *ev)
 {
 	ngx_http_push_subscriber_t *subscriber = NULL;
 	ngx_http_request_t *r = NULL;
@@ -424,10 +424,14 @@ static ngx_int_t ngx_http_push_subscriber_handler(ngx_http_request_t *r) {
 					ngx_queue_insert_tail(&subscriber_sentinel->queue, &subscriber->queue);
 					
 					if (cf->subscriber_timeout > 0) {		
-						subscriber->event.handler = ngx_http_push_clean_timeouted_subscribter;	
+						subscriber->event.handler = ngx_http_push_clean_timeouted_subscriber;	
 						subscriber->event.data = subscriber;
 						subscriber->event.log = r->connection->log;
 						ngx_add_timer(&subscriber->event, cf->subscriber_timeout * 1000);
+					} else  {		
+						subscriber->event.handler = NULL;
+						subscriber->event.data = NULL;
+						subscriber->event.log = NULL;
 					}
 
 					r->read_event_handler = ngx_http_test_reading;
@@ -912,6 +916,12 @@ static ngx_int_t ngx_http_push_respond_to_subscribers(ngx_http_push_channel_t *c
 			next=(ngx_http_push_subscriber_t *)ngx_queue_next(&cur->queue);
 			//in this block, nothing in shared memory should be dereferenced.
 			r=cur->request;
+
+			// first remove the timer
+			if (cur->event.handler) {
+			    ngx_del_timer(&cur->event);
+			}
+
 			//cleanup oughtn't dequeue anything. or decrement the subscriber count, for that matter
 			cur->clndata->subscriber=NULL;
 			cur->clndata->channel=NULL;
