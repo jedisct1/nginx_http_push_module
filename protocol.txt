@@ -1,6 +1,6 @@
                          Basic HTTP Push Relay Protocol
 
-   Rev. 2.23
+   Rev. 2.24
 
 1. Introduction
 
@@ -112,6 +112,9 @@
    message. Additionally, said 200 OK MUST contain the Content-Type header
    of the message publisher request, unless no Content-Type header had
    been provided or it is explicitly overridden by server configuration.
+   In order to support cross-domain requests using standard CORS
+   mechanisms, replies to long-polling requests may include a copy of
+   the Etag value as a Pragma: NPM-Etag= header.
 
    There are several common mechanisms for performing an HTTP server push.
    The rest of the behavior of the server in response to a subscriber
