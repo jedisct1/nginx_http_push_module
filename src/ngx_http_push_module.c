@@ -23,7 +23,6 @@ static void ngx_http_push_clean_timeouted_subscriber(ngx_event_t *ev)
 
 	subscriber = ev->data;
 	r = subscriber->request;
-	//r->discard_body=0; //hacky hacky!
 
 	if (r->connection->destroyed) {
 		return;
@@ -934,7 +933,6 @@ static ngx_int_t ngx_http_push_respond_to_subscribers(ngx_http_push_channel_t *c
 			next=(ngx_http_push_subscriber_t *)ngx_queue_next(&cur->queue);
 			//in this block, nothing in shared memory should be dereferenced.
 			r=cur->request;
-			//r->discard_body=0; //hacky hacky!
 			
 			ngx_http_finalize_request(r, ngx_http_push_prepare_response_to_subscriber_request(r, chain, content_type, etag, pragma, last_modified_time)); //BAM!
 			responded_subscribers++;
